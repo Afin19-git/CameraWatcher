@@ -58,7 +58,7 @@ The camera feeds one `SurfaceTexture`; OpenGL draws each frame into three places
 
 ## Privacy and responsible use
 
-Recordings stay on your phone and in your own Google Drive; the developer receives nothing. See the [privacy policy](https://afin19-git.github.io/CameraWatcher/privac.html). Laws on video and audio recording of people differ between countries: make sure your use is legal and inform people where required.
+Recordings stay on your phone and in your own Google Drive; the developer receives nothing. See the [privacy policy](https://afin19-git.github.io/CameraWatcher/privacy.html). Laws on video and audio recording of people differ between countries: make sure your use is legal and inform people where required.
 
 ## License
 
