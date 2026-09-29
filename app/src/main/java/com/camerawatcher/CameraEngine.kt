@@ -8,6 +8,8 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.opengl.EGL14
 import android.opengl.EGLSurface
 import android.opengl.Matrix
@@ -83,6 +85,8 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
 
     private var lastAnalysis = 0L
     private var lastMotion = 0L
+    private var lastBeep = 0L
+    private var tone: ToneGenerator? = null
     private var recStart = 0L
     private var recFailUntil = 0L
     private var recorder: VideoRecorder? = null
@@ -135,6 +139,8 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
     private fun releaseAll() {
         released = true
         handler.removeCallbacksAndMessages(null)
+        try { tone?.release() } catch (_: Exception) {}
+        tone = null
         if (recording) stopRecording()
         try { session?.close() } catch (_: Exception) {}
         session = null
@@ -398,10 +404,30 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
         if (motion) {
             lastMotion = now
             if (armed && !recording && now >= recFailUntil && !storageBlocked()) startRecording(now)
+            maybeBeep(now)
         }
         val act = detector.active.copyOf()
         val rec = recording
         main.post { for (l in listeners) l.onAnalysis(g.cols, g.rows, act, motion, rec) }
+    }
+
+    /** Короткий «би-бип» через динамик — не чаще, чем раз в Prefs.soundAlertCooldownSec, пока движение продолжается. */
+    private fun maybeBeep(now: Long) {
+        if (!Prefs.soundAlert) return
+        if (now - lastBeep < Prefs.soundAlertCooldownSec * 1000L) return
+        lastBeep = now
+        val tg = tone ?: try {
+            ToneGenerator(AudioManager.STREAM_ALARM, 80).also { tone = it }
+        } catch (e: Exception) {
+            logE("tone init", e)
+            return
+        }
+        try {
+            tg.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
+            handler.postDelayed({ try { tg.startTone(ToneGenerator.TONE_PROP_BEEP, 120) } catch (_: Exception) {} }, 220)
+        } catch (e: Exception) {
+            logE("beep", e)
+        }
     }
 
     private fun storageBlocked() = Prefs.lowDevice || Prefs.lowDrive

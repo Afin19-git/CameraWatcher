@@ -64,6 +64,10 @@
     <string name="grid_short">Сетка, короткая сторона</string>
     <string name="grid_short_dialog">Клеток по короткой стороне кадра</string>
     <string name="grid_note">По умолчанию 16×9. Для вертикального кадра сетка поворачивается сама (9×16). При смене сетки маска зон сбрасывается. Чувствительность и маска настраиваются на главном экране.</string>
+    <string name="sound_alert">Звуковой сигнал при движении</string>
+    <string name="sound_alert_cooldown">Интервал сигнала</string>
+    <string name="sound_alert_cooldown_dialog">Не чаще, чем раз в столько секунд, пока движение продолжается</string>
+    <string name="sound_alert_note">Короткий двойной сигнал звучит через динамик при обнаружении движения — как звонок, не часть записи. Использует громкость будильника, поэтому слышен даже в беззвучном режиме.</string>
     <string name="sec_schedule">РАСПИСАНИЕ ЗАПИСИ</string>
     <string name="sched_switch">Записывать только в заданные часы</string>
     <string name="sched_on">Включать в</string>

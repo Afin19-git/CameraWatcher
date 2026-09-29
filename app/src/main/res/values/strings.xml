@@ -64,6 +64,10 @@
     <string name="grid_short">Grid, short side</string>
     <string name="grid_short_dialog">Cells along the short side of the frame</string>
     <string name="grid_note">Default is 16×9. For a portrait frame the grid turns by itself (9×16). Changing the grid resets the mask. Sensitivity and mask are set on the main screen.</string>
+    <string name="sound_alert">Beep on motion</string>
+    <string name="sound_alert_cooldown">Beep interval</string>
+    <string name="sound_alert_cooldown_dialog">Minimum gap between beeps while motion continues</string>
+    <string name="sound_alert_note">A short double beep plays through the speaker when motion is detected — like a chime, not part of the recording. Uses the alarm volume, so it stays audible even in silent mode.</string>
     <string name="sec_schedule">RECORDING SCHEDULE</string>
     <string name="sched_switch">Record only during set hours</string>
     <string name="sched_on">Turn on at</string>

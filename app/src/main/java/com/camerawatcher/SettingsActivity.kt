@@ -167,6 +167,24 @@ class SettingsActivity : Activity() {
             pickNumber(getString(R.string.grid_short_dialog), 3, 32, Prefs.gridShort) { Prefs.gridShort = it; render() }
         })
         c.addView(text(getString(R.string.grid_note), 12f, Theme.MUTED))
+
+        val sw = Switch(this).apply {
+            text = getString(R.string.sound_alert)
+            setTextColor(Theme.TEXT)
+            textSize = 15f
+            isChecked = Prefs.soundAlert
+            setOnCheckedChangeListener { _, on -> Prefs.soundAlert = on; render() }
+        }
+        sw.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(14)
+        }
+        c.addView(sw)
+        if (Prefs.soundAlert) {
+            c.addView(row(getString(R.string.sound_alert_cooldown), getString(R.string.sec_fmt, Prefs.soundAlertCooldownSec)) {
+                pickNumber(getString(R.string.sound_alert_cooldown_dialog), 1, 60, Prefs.soundAlertCooldownSec) { Prefs.soundAlertCooldownSec = it; render() }
+            })
+        }
+        c.addView(text(getString(R.string.sound_alert_note), 12f, Theme.MUTED))
     }
 
     // ------------------------------------------------------------ расписание записи

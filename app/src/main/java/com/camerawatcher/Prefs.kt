@@ -73,6 +73,14 @@ object Prefs {
     var postRollSec: Int
         get() = gi("postRollSec", 6)
         set(v) = pi("postRollSec", v.coerceIn(2, 60))
+    /** Короткий звуковой сигнал (би-бип) при обнаружении движения — как звонок, не для записи. */
+    var soundAlert: Boolean
+        get() = gb("soundAlert", false)
+        set(v) = pb("soundAlert", v)
+    /** Не чаще, чем раз в столько секунд, пока движение продолжается. */
+    var soundAlertCooldownSec: Int
+        get() = gi("soundAlertCooldownSec", 5)
+        set(v) = pi("soundAlertCooldownSec", v.coerceIn(1, 60))
 
     fun maskFor(cols: Int, rows: Int): BooleanArray {
         val arr = BooleanArray(cols * rows)

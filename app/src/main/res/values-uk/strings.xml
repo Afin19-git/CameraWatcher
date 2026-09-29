@@ -64,6 +64,10 @@
     <string name="grid_short">Сітка, коротша сторона</string>
     <string name="grid_short_dialog">Клітинок по коротшій стороні кадру</string>
     <string name="grid_note">За замовчуванням 16×9. Для вертикального кадру сітка повертається сама (9×16). Під час зміни сітки маска зон скидається. Чутливість і маска налаштовуються на головному екрані.</string>
+    <string name="sound_alert">Звуковий сигнал при русі</string>
+    <string name="sound_alert_cooldown">Інтервал сигналу</string>
+    <string name="sound_alert_cooldown_dialog">Не частіше, ніж раз на стільки секунд, поки рух триває</string>
+    <string name="sound_alert_note">Короткий подвійний сигнал звучить через динамік при виявленні руху — як дзвінок, не частина запису. Використовує гучність будильника, тому чутний навіть у беззвучному режимі.</string>
     <string name="sec_schedule">РОЗКЛАД ЗАПИСУ</string>
     <string name="sched_switch">Записувати лише в задані години</string>
     <string name="sched_on">Вмикати о</string>
