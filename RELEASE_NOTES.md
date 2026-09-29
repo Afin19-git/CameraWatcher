@@ -1,6 +1,6 @@
 <!-- Paste this into the GitHub Release description. Attach CameraWatcher-1.0.0.apk. -->
 
-## CameraWatcher 1.0.0
+## CameraWatcher 1.1.0
 
 **English.** Turn an old Android phone into a motion-activated security camera: grid motion detection with a paintable mask, hardware-encoded recording with separate resolution / FPS / bitrate, auto rotation, recording schedule, daily timelapse, upload to your own Google Drive, separate retention for clips and timelapses. Interface in English, Russian and Ukrainian.
 
