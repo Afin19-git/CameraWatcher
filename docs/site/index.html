@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CameraWatcher</title>
+<style>
+  :root { --bg:#f7f8f6; --fg:#1b1f1d; --muted:#5a635e; --line:#d9dfdb; --accent:#0b7a52; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#121513; --fg:#e6eae7; --muted:#9aa5a0; --line:#2a312d; --accent:#4fd6a0; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:40rem; margin:0 auto; padding:3rem 1.25rem 4rem; }
+  h1 { font-size:2rem; line-height:1.2; margin:0 0 .5rem; }
+  h2 { font-size:1.1rem; margin:2rem 0 .4rem; }
+  p, li { max-width:36rem; }
+  a { color:var(--accent); }
+  .lead { color:var(--muted); font-size:1.1rem; margin:0 0 1.5rem; }
+  hr { border:0; border-top:1px solid var(--line); margin:2.5rem 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>CameraWatcher</h1>
+  <p class="lead">An Android app that turns an old phone into a motion-activated security camera.</p>
+
+  <h2>What it does</h2>
+  <ul>
+    <li>Watches the camera image and records a video clip only when something moves.</li>
+    <li>Stamps date and time on the video and builds a short daily timelapse.</li>
+    <li>Keeps clips on the phone and, if you sign in with Google, uploads them to your own Google Drive.</li>
+  </ul>
+
+  <h2>Google Drive access</h2>
+  <p>The app asks for one permission, <code>drive.file</code>. It lets the app see and manage only the files and folders the app itself created in your Drive (a folder named “Камера видеонаблюдения” with clips sorted by date). It cannot read any of your other files. Nothing is sent to any server run by the developer.</p>
+
+  <h2>Privacy</h2>
+  <p>No ads, no analytics, no accounts on our side. Read the <a href="privacy.html">Privacy Policy</a>.</p>
+
+  <hr>
+  <h1 style="font-size:1.4rem">CameraWatcher (по-русски)</h1>
+  <p>Приложение для Android, которое превращает старый телефон в камеру видеонаблюдения с записью по движению. Клипы хранятся на телефоне и, если вы вошли через Google, загружаются в ваш собственный Google Drive. Доступ только к файлам, созданным самим приложением. Подробнее: <a href="privacy.html">политика конфиденциальности</a>.</p>
+  <hr>
+  <section lang="uk">
+    <h1 style="font-size:1.4rem">CameraWatcher (українською)</h1>
+    <p>Застосунок для Android, який перетворює старий телефон на камеру відеоспостереження із записом за рухом. Кліпи зберігаються на телефоні та, якщо ви увійшли через Google, завантажуються у ваш власний Google Drive. Доступ лише до файлів, створених самим застосунком. Докладніше: <a href="privacy.html">політика конфіденційності</a>.</p>
+  </section>
+</main>
+</body>
+</html>
