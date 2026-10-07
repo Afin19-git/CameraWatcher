@@ -293,7 +293,8 @@ class CameraService : Service(), CameraEngine.Listener {
         onBeforeEngineStart?.invoke() // экран с превью отпускает камеру
         try {
             acquireWake()
-            val e = CameraEngine(this, true, DeviceOrientation.sampleDeg(this))
+            val rot = if (Prefs.cameraSource == "usb") 0 else DeviceOrientation.sampleDeg(this)
+            val e = CameraEngine(this, true, rot)
             e.addListener(this)
             engine = e
             e.start()

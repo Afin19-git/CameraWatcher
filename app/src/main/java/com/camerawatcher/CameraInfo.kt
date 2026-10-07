@@ -87,19 +87,34 @@ class CameraInfo private constructor(ctx: Context) {
 
 /**
  * Всё, что нужно знать о кадре.
- * rot — на сколько градусов по часовой нужно повернуть «сырой» кадр сенсора, чтобы он стоял ровно
- * (телефон может быть закреплён в любом положении — это определяется автоматически по акселерометру).
- * outW/outH — размер итогового видео: сенсор целиком, без обрезки, в том соотношении, какое он снимает.
+ * rot — на сколько градусов по часовой нужно повернуть «сырой» кадр источника, чтобы он стоял ровно.
+ * Для телефонной камеры определяется автоматически по акселерометру; для USB-камеры задаётся вручную
+ * в настройках, так как веб-камера крепится отдельно от телефона и не поворачивается вместе с ним.
+ * outW/outH — размер итогового видео: кадр целиком, без обрезки, в том соотношении, какое отдаёт источник.
+ * fpsRange — только для Camera2 (телефон); для USB-источника не используется (null).
  */
 data class Geometry(
     val camW: Int, val camH: Int,
     val rot: Int,
     val outW: Int, val outH: Int,
     val cols: Int, val rows: Int,
-    val fps: Int, val fpsRange: Range<Int>
+    val fps: Int, val fpsRange: Range<Int>?
 )
 
 object GeometryBuilder {
+    /** Поворот и итоговый размер кадра из «сырого» размера источника — общая часть для телефона и USB. */
+    private fun frame(rawW: Int, rawH: Int, rot: Int): Triple<Int, Int, Pair<Int, Int>> {
+        val swap = rot == 90 || rot == 270
+        val outW = (if (swap) rawH else rawW) and 1.inv()
+        val outH = (if (swap) rawW else rawH) and 1.inv()
+        val long = Prefs.gridLong
+        val short = Prefs.gridShort
+        val cols = if (outW >= outH) long else short
+        val rows = if (outW >= outH) short else long
+        return Triple(outW, outH, cols to rows)
+    }
+
+    /** Геометрия для телефонной камеры (Camera2): поворот — по акселерометру. */
     fun build(ctx: Context, displayRotationDeg: Int): Geometry {
         val ci = CameraInfo.get(ctx)
         val wantArea = Prefs.resW * Prefs.resH
@@ -112,15 +127,18 @@ object GeometryBuilder {
         val range = ci.rangeFor(fps) ?: Range(fps, fps)
 
         val rot = (ci.sensorOrientation - displayRotationDeg + 360) % 360
-        val swap = rot == 90 || rot == 270
-        val outW = (if (swap) size.height else size.width) and 1.inv()
-        val outH = (if (swap) size.width else size.height) and 1.inv()
+        val (outW, outH, grid) = frame(size.width, size.height, rot)
+        return Geometry(size.width, size.height, rot, outW, outH, grid.first, grid.second, fps, range)
+    }
 
-        val long = Prefs.gridLong
-        val short = Prefs.gridShort
-        val cols = if (outW >= outH) long else short
-        val rows = if (outW >= outH) short else long
-
-        return Geometry(size.width, size.height, rot, outW, outH, cols, rows, fps, range)
+    /**
+     * Геометрия для USB-веб-камеры: camW/camH — реально согласованный с камерой размер (известен только
+     * после её подключения), поворот — ручная настройка Prefs.usbRotation. FPS берётся из настроек записи
+     * (сама USB-камера частоту кадров через эту библиотеку не сообщает, кодируем с тем, что реально придёт).
+     */
+    fun buildUsb(camW: Int, camH: Int): Geometry {
+        val rot = Prefs.usbRotation
+        val (outW, outH, grid) = frame(camW, camH, rot)
+        return Geometry(camW, camH, rot, outW, outH, grid.first, grid.second, Prefs.fps, null)
     }
 }

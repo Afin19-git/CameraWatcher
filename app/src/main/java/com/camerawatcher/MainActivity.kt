@@ -32,6 +32,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CameraEngine.Listener {
     private lateinit var overlay: GridOverlayView
     private lateinit var frame: AspectFrame
     private lateinit var status: TextView
+    private lateinit var sourceStatus: TextView
     private lateinit var gridInfo: TextView
     private lateinit var sensLabel: TextView
     private lateinit var startBtn: TextView
@@ -91,6 +92,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CameraEngine.Listener {
             ).apply { topMargin = dp(10) }
         }
         col.addView(status)
+
+        sourceStatus = text("", 12f, Theme.MUTED).apply {
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(4) }
+        }
+        col.addView(sourceStatus)
 
         // превью + сетка
         frame = AspectFrame(this).apply {
@@ -233,7 +242,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CameraEngine.Listener {
                 e = svc
                 ownsEngine = false
             } else {
-                e = CameraEngine(this, false, DeviceOrientation.sampleDeg(this))
+                // Для USB-камеры акселерометр ни при чём — поворот в настройках, ждать датчик незачем.
+                val rot = if (Prefs.cameraSource == "usb") 0 else DeviceOrientation.sampleDeg(this)
+                e = CameraEngine(this, false, rot)
                 ownsEngine = true
                 e.start()
             }
@@ -246,6 +257,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CameraEngine.Listener {
         e.addListener(this)
         applyGeometry(e.geometry)
         if (surfaceReady) e.setPreviewSurface(surface.holder.surface)
+        sourceStatus.visibility = if (e.usingUsb) View.VISIBLE else View.GONE
+        sourceStatus.text = getString(R.string.usb_not_found)
+        sourceStatus.setTextColor(Theme.MUTED)
         updateUi()
     }
 
@@ -301,6 +315,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CameraEngine.Listener {
     /** Только для превью: телефон повернули в руках, пока прикидывают крепление — обновляем рамку и сетку сразу. */
     override fun onGeometryChanged(g: Geometry) {
         applyGeometry(g)
+    }
+
+    override fun onSourceStatus(connected: Boolean) {
+        if (engine?.usingUsb != true) return
+        sourceStatus.visibility = View.VISIBLE
+        sourceStatus.text = getString(if (connected) R.string.usb_connected else R.string.usb_not_found)
+        sourceStatus.setTextColor(if (connected) Theme.ACCENT else Theme.MUTED)
     }
 
     // ------------------------------------------------------------ кнопки

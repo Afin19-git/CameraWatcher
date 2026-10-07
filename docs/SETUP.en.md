@@ -8,7 +8,7 @@
 2. *File → Open* the project folder and wait for Gradle sync.
 3. Connect a phone with USB debugging and press *Run*, or use *Build → Build APK(s)*.
 
-The app needs Android 7.0 (API 24). The only dependency is `play-services-auth`.
+The app needs Android 7.0 (API 24). Dependencies: `play-services-auth` (Google Drive sign-in) and, for the USB-webcam camera source, `libausbc` fetched from JitPack — the first Gradle sync needs internet access to jitpack.io.
 
 ## 2. Sign with your own key
 
@@ -42,5 +42,6 @@ If you change `applicationId` in a fork, create a client for the new package nam
 - **Error 10 / “app not found”**: package name or SHA-1 in the client does not match the installed build, or the client was created minutes ago.
 - **Sign-in expires every week**: the app is still in *Testing*, publish it.
 - **`keytool` is not recognized**: use the full path (see step 2.1).
+- **Gradle can't resolve `com.github.WojciechCzeronko.AndroidUSBCamera:libausbc`**: check internet access to jitpack.io (corporate networks sometimes block it), and that the tag `3.6.0-lowlatency1` still exists in that GitHub repo — if the maintainer renamed or removed it, open the repo's Releases/Tags page, pick a current tag, and update the version in `app/build.gradle.kts`.
 - **Play Protect warns about the app**: expected for a background camera service that is not from Google Play. *More details → Install anyway*.
 - **Folders on Drive are named in the wrong language**: names are fixed when you sign in. Sign out and in again after changing the language to switch to a new folder tree (old files stay in the old one).

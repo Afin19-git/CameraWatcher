@@ -18,6 +18,7 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Surface
+import android.util.Range
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -43,6 +44,8 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
         fun onClipSaved(file: File) {}
         /** Только для превью (armed=false): телефон повернули, картинка и сетка пересчитаны. */
         fun onGeometryChanged(g: Geometry) {}
+        /** Только источник USB: подключилась или пропала веб-камера. */
+        fun onSourceStatus(connected: Boolean) {}
     }
 
     private val listeners = CopyOnWriteArrayList<Listener>()
@@ -54,7 +57,11 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
      * так его удобно позиционировать до фактической установки. В боевом режиме (armed=true, сервис записи)
      * фиксируется один раз при старте: менять размер кадра посреди записи нельзя.
      */
-    var geometry: Geometry = GeometryBuilder.build(ctx, displayRotation)
+    val usingUsb = Prefs.cameraSource == "usb"
+
+    var geometry: Geometry =
+        if (usingUsb) GeometryBuilder.buildUsb(Prefs.usbResW, Prefs.usbResH)
+        else GeometryBuilder.build(ctx, displayRotation)
         private set
 
     @Volatile var recording = false
@@ -98,6 +105,8 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
     private var released = false
     private var mvpReady = false
     private var recErrors = 0
+    private var usbSource: UsbCameraSource? = null
+    private var usbWarnedNoDevice = false
 
     companion object {
         private const val ANALYSIS_MS = 200L      // детектор работает 5 раз в секунду
@@ -108,14 +117,16 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
     fun start() {
         thread.start()
         handler = Handler(thread.looper)
-        if (!armed) DeviceOrientation.start(ctx) // превью: следим за поворотом непрерывно, пока камеру не выключат
+        // Живое слежение за акселерометром имеет смысл только для своей камеры телефона: внешняя
+        // USB-камера закреплена отдельно и не поворачивается вместе с телефоном.
+        if (!armed && !usingUsb) DeviceOrientation.start(ctx)
         handler.post { safeInit() }
     }
 
     private fun safeInit() {
         try {
             initGl()
-            openCamera()
+            if (usingUsb) openUsbCamera() else openCamera()
             handler.postDelayed(tickRunnable, 1000)
         } catch (e: Exception) {
             logE("init failed", e)
@@ -126,7 +137,7 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
     fun stop() {
         if (stopped) return
         stopped = true
-        if (!armed) DeviceOrientation.stop()
+        if (!armed && !usingUsb) DeviceOrientation.stop()
         val latch = CountDownLatch(1)
         handler.post {
             try { releaseAll() } catch (e: Exception) { logE("release", e) } finally { latch.countDown() }
@@ -142,6 +153,8 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
         try { tone?.release() } catch (_: Exception) {}
         tone = null
         if (recording) stopRecording()
+        try { usbSource?.stop() } catch (_: Exception) {}
+        usbSource = null
         try { session?.close() } catch (_: Exception) {}
         session = null
         try { camera?.close() } catch (_: Exception) {}
@@ -196,8 +209,17 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
         detector.configure(g.cols, g.rows, Prefs.maskFor(g.cols, g.rows), Prefs.sensitivity)
     }
 
-    /** Только для превью: телефон могли повернуть в руках, пока подбирают крепление. Дёшево — раз в секунду. */
+    /**
+     * Только для превью, дёшево — раз в секунду.
+     * Телефон: могли повернуть в руках, пока подбирают крепление — следим за акселерометром.
+     * USB-камера: поворот ручной (Prefs.usbRotation) — следим, не поменяли ли его в настройках.
+     */
     private fun checkOrientationChange() {
+        if (usingUsb) {
+            if (Prefs.usbRotation == geometry.rot) return
+            applyNewGeometry(GeometryBuilder.buildUsb(geometry.camW, geometry.camH))
+            return
+        }
         val newG = try { GeometryBuilder.build(ctx, DeviceOrientation.current()) } catch (e: Exception) { return }
         if (newG.rot == geometry.rot) return // поворот не поменялся
         applyNewGeometry(newG)
@@ -301,6 +323,34 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
         if (!released) handler.postDelayed({ openCamera() }, 2000)
     }
 
+    /**
+     * USB-веб-камера вместо своей камеры телефона. UsbCameraSource сама следит за подключением/отключением
+     * устройства (через постоянно зарегистрированный приёмник системных широковещательных сообщений), поэтому
+     * эта функция вызывается один раз за всё время жизни движка, а не в цикле переоткрытия, как у Camera2.
+     */
+    private fun openUsbCamera() {
+        if (released) return
+        val surf = camSurface ?: return
+        val src = UsbCameraSource(ctx)
+        usbSource = src
+        src.start(surf, g.camW, g.camH, object : UsbCameraSource.Listener {
+            override fun onReady(camW: Int, camH: Int) {
+                logI("USB camera ready ${camW}x$camH")
+                usbWarnedNoDevice = false
+                main.post { for (l in listeners) l.onSourceStatus(true) }
+            }
+            override fun onError(message: String) {
+                logE("USB camera: $message")
+                warn(message)
+                main.post { for (l in listeners) l.onSourceStatus(false) }
+            }
+            override fun onDisconnected() {
+                main.post { for (l in listeners) l.onSourceStatus(false) }
+                handler.post { if (recording) stopRecording() }
+            }
+        })
+    }
+
     @Suppress("DEPRECATION")
     private fun createSession() {
         val c = camera ?: return
@@ -313,7 +363,7 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
                     try {
                         val rb = c.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
                         rb.addTarget(surf)
-                        rb.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, g.fpsRange)
+                        rb.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, g.fpsRange ?: Range(g.fps, g.fps))
                         rb.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                         rb.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
                         s.setRepeatingRequest(rb.build(), null, handler)
@@ -501,14 +551,18 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
                         startRecording(now) // событие продолжается — новый файл
                     }
                 }
+                tickCount++
                 if (armed) {
-                    tickCount++
                     if (tickCount % 10 == 1) checkStorage()
                     val d = Prefs.lowDrive
                     if (d && !prevLowDrive) warn(str(R.string.w_drive_full))
                     prevLowDrive = d
                 } else {
                     checkOrientationChange()
+                }
+                if (usingUsb && !usbWarnedNoDevice && tickCount == 8 && usbSource?.connected != true) {
+                    usbWarnedNoDevice = true
+                    warn(str(R.string.w_no_usb_camera))
                 }
             } catch (ex: Exception) {
                 logE("tick", ex)

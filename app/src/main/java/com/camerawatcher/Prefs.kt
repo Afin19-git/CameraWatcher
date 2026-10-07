@@ -97,6 +97,23 @@ object Prefs {
         sp.edit().putInt("maskCols", cols).putInt("maskRows", rows).putString("maskCells", cells).apply()
     }
 
+    // ---- источник камеры ----
+    /** "phone" — своя камера телефона, "usb" — веб-камера по OTG. */
+    var cameraSource: String
+        get() = gs("cameraSource", "phone")
+        set(v) = ps("cameraSource", v)
+    /** Желаемое разрешение USB-камеры (реальное может отличаться — зависит от того, что поддерживает камера). */
+    var usbResW: Int
+        get() = gi("usbResW", 1280)
+        set(v) = pi("usbResW", v)
+    var usbResH: Int
+        get() = gi("usbResH", 720)
+        set(v) = pi("usbResH", v)
+    /** Поворот USB-камеры задаётся вручную (0/90/180/270): она закреплена отдельно от телефона. */
+    var usbRotation: Int
+        get() = gi("usbRotation", 0)
+        set(v) = pi("usbRotation", ((v % 360) + 360) % 360)
+
     // ---- запись ----
     var resW: Int
         get() = gi("resW", 1280)

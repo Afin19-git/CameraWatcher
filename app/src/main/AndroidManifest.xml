@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -15,6 +16,9 @@
 
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+    <!-- Библиотека USB-камеры (AndroidUSBCamera) объявляет этот признак обязательным; у нас это
+         необязательная возможность — без OTG приложение работает со своей камерой телефона. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" tools:node="replace" />
 
     <application
         android:name=".App"

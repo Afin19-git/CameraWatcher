@@ -15,14 +15,17 @@ val hasOwnKey = keystoreProps.isNotEmpty()
 
 android {
     namespace = "com.camerawatcher"
-    compileSdk = 34
+    // 36: этого требует androidx.core:core 1.18.0, который библиотека USB-камеры тянет за собой
+    // транзитивно (сам AAR собран под 36 и настаивает на этом у потребителя). AGP ниже 8.9.1
+    // собирать против compileSdk 36 не умеет — поэтому ниже версия AGP тоже поднята.
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.camerawatcher"
         minSdk = 24
         targetSdk = 33
-        versionCode = 3
-        versionName = "1.0.0"
+        versionCode = 4
+        versionName = "1.2.0"
     }
 
     signingConfigs {
@@ -55,4 +58,7 @@ android {
 dependencies {
     // Вход в Google и токен для Drive (Google Identity Services)
     implementation("com.google.android.gms:play-services-auth:22.0.0")
+    // USB-веб-камера (UVC) по OTG: https://github.com/WojciechCzeronko/AndroidUSBCamera
+    implementation("com.github.WojciechCzeronko.AndroidUSBCamera:libausbc:3.6.0-lowlatency1")
+    implementation("com.github.WojciechCzeronko.AndroidUSBCamera:libuvc:3.6.0-lowlatency1")
 }

@@ -52,12 +52,28 @@ class SettingsActivity : Activity() {
             })
         }
         languageCard()
+        sourceCard()
         recordingCard()
         detectionCard()
         scheduleCard()
         timelapseCard()
         driveCard()
         storageCard()
+    }
+
+    private fun sourceCard() {
+        val c = section(getString(R.string.sec_source))
+        val isUsb = Prefs.cameraSource == "usb"
+        c.addView(row(getString(R.string.camera_source), getString(if (isUsb) R.string.source_usb else R.string.source_phone)) {
+            pickList(getString(R.string.camera_source), listOf(getString(R.string.source_phone), getString(R.string.source_usb)), if (isUsb) 1 else 0) { i ->
+                Prefs.cameraSource = if (i == 1) "usb" else "phone"
+                render()
+            }
+        })
+        c.addView(text(if (isUsb) getString(R.string.source_usb_note) else getString(R.string.source_phone_note), 12f, Theme.MUTED))
+        if (CameraService.active) {
+            c.addView(text(getString(R.string.source_change_note), 12f, Theme.MUTED).apply { setPadding(0, dp(4), 0, 0) })
+        }
     }
 
     private fun aspectName(s: Size): String {
@@ -93,6 +109,7 @@ class SettingsActivity : Activity() {
 
     // ------------------------------------------------------------ запись
     private fun recordingCard() {
+        if (Prefs.cameraSource == "usb") { usbRecordingCard(); return }
         val c = section(getString(R.string.sec_recording))
         val ci = try { CameraInfo.get(this) } catch (e: Exception) { null }
         if (ci == null) {
@@ -123,6 +140,49 @@ class SettingsActivity : Activity() {
             }
         })
 
+        bitrateRow(c)
+        codecRow(c)
+        labelRow(c)
+        c.addView(text(getString(R.string.rotation_note), 12f, Theme.MUTED))
+        postrollRow(c)
+    }
+
+    /** То же самое для веб-камеры: разрешение — фиксированный список (реальные размеры узнаются только
+     * после подключения конкретной камеры), FPS не выбирается (библиотека не даёт на это влиять),
+     * поворот — вручную, камера крепится отдельно от телефона. */
+    private fun usbRecordingCard() {
+        val c = section(getString(R.string.sec_recording))
+        c.addView(text(getString(R.string.usb_card_hint), 12f, Theme.MUTED).apply { setPadding(0, 0, 0, dp(6)) })
+
+        val sizes = listOf(640 to 480, 1280 to 720, 1920 to 1080)
+        val cur = sizes.indexOf(Prefs.usbResW to Prefs.usbResH).coerceAtLeast(0)
+        c.addView(row(getString(R.string.resolution), "${Prefs.usbResW}×${Prefs.usbResH}") {
+            val items = sizes.map { "${it.first}×${it.second}" }
+            pickList(getString(R.string.resolution), items, cur) { i ->
+                Prefs.usbResW = sizes[i].first
+                Prefs.usbResH = sizes[i].second
+                render()
+            }
+        })
+        c.addView(text(getString(R.string.usb_resolution_note), 12f, Theme.MUTED))
+
+        bitrateRow(c)
+        codecRow(c)
+        labelRow(c)
+
+        val rotVals = listOf(0, 90, 180, 270)
+        val rotItems = rotVals.map { getString(R.string.deg_fmt, it) }
+        c.addView(row(getString(R.string.usb_rotation), getString(R.string.deg_fmt, Prefs.usbRotation)) {
+            pickList(getString(R.string.usb_rotation), rotItems, rotVals.indexOf(Prefs.usbRotation).coerceAtLeast(0)) { i ->
+                Prefs.usbRotation = rotVals[i]
+                render()
+            }
+        })
+        c.addView(text(getString(R.string.usb_rotation_note), 12f, Theme.MUTED))
+        postrollRow(c)
+    }
+
+    private fun bitrateRow(c: LinearLayout) {
         c.addView(row(getString(R.string.bitrate), getString(R.string.kbps_fmt, Prefs.bitrateKbps)) {
             pickList(getString(R.string.bitrate), bitrates.map { getString(R.string.kbps_fmt, it) }, bitrates.indexOf(Prefs.bitrateKbps)) { i ->
                 Prefs.bitrateKbps = bitrates[i]
@@ -132,7 +192,9 @@ class SettingsActivity : Activity() {
         val audio = if (Prefs.mute) 0 else 64
         val mbPerHour = (Prefs.bitrateKbps + audio) * 1000L / 8 * 3600 / 1_000_000
         c.addView(text(getString(R.string.bitrate_note, mbPerHour), 12f, Theme.MUTED))
+    }
 
+    private fun codecRow(c: LinearLayout) {
         val codecLabel = when {
             Prefs.codecMode == "h264" -> "H.264"
             Codecs.hevcAvailable() && !Prefs.hevcFailed -> getString(R.string.codec_auto_hevc)
@@ -145,13 +207,15 @@ class SettingsActivity : Activity() {
                 render()
             }
         })
+    }
 
+    private fun labelRow(c: LinearLayout) {
         c.addView(row(getString(R.string.label_row), if (Prefs.label.isBlank()) getString(R.string.label_only_datetime) else Prefs.label) {
             editText(getString(R.string.label_dialog), Prefs.label) { Prefs.label = it; render() }
         })
+    }
 
-        c.addView(text(getString(R.string.rotation_note), 12f, Theme.MUTED))
-
+    private fun postrollRow(c: LinearLayout) {
         c.addView(row(getString(R.string.postroll), getString(R.string.sec_fmt, Prefs.postRollSec)) {
             pickNumber(getString(R.string.postroll_dialog), 2, 60, Prefs.postRollSec) { Prefs.postRollSec = it; render() }
         })
