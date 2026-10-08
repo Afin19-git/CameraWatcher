@@ -4,6 +4,14 @@
 
 Turn an old Android phone into a motion-activated security camera. It records a video clip only when something moves, uploads clips to **your own** Google Drive and builds a short timelapse of the day. No ads, no analytics, no servers of ours.
 
+<p float="left">
+  <img src="docs/main_1.png" width="160">
+  <img src="docs/main_2.png" width="160">
+  <img src="docs/settings_1.png" width="160">
+  <img src="docs/setting_2.png" width="160">
+  <img src="docs/settings_3.png" width="160">
+</p>
+
 ## Features
 
 - **Motion detection on a grid.** 16×9 by default, up to 32 cells on the long side. Adjustable sensitivity and a mask you paint with a finger to ignore trees, curtains, clocks.
