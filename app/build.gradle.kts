@@ -60,5 +60,8 @@ dependencies {
     implementation("com.google.android.gms:play-services-auth:22.0.0")
     // USB-веб-камера (UVC) по OTG: https://github.com/WojciechCzeronko/AndroidUSBCamera
     implementation("com.github.WojciechCzeronko.AndroidUSBCamera:libausbc:3.6.0-lowlatency1")
+    // libausbc подключает этот модуль у себя как implementation, а не api, поэтому классы libuvc
+    // (в т.ч. USBMonitor, который используется в UsbCameraSource.kt) не передаются транзитивно —
+    // нужно подключать явно, отдельной строкой.
     implementation("com.github.WojciechCzeronko.AndroidUSBCamera:libuvc:3.6.0-lowlatency1")
 }
