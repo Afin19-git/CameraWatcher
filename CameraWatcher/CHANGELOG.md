@@ -1,14 +1,15 @@
 # Changelog
 
-## 1.2.1
+## 1.2.2
 
 Fixes to the USB webcam source after first testing on a Redmi 9C. Still **not verified on real hardware with a webcam**.
 
 - **Reconnect no longer breaks the camera.** Before a new session opens, the previous UVC session is now closed and its USB interface released. Before, reopening after unplug/replug failed with `open failed: result=-1` or `-99` because the old session still held the camera.
 - **No double open.** The connect event and the permission request could both open the same webcam, and the second attempt hit a busy device. A camera that is already open is no longer opened again.
-- **Clean release on disconnect.** Unplugging the webcam, or stopping the service, now closes the camera and unregisters the USB receiver. Callbacks that arrive after stop are ignored.
+- **Clean stop.** Stopping the service closes the camera and unregisters the USB receiver. Callbacks that arrive after stop are ignored.
 - **Resolution fallback.** If the webcam rejects the chosen size with `unsupported preview size`, the app retries once at 640×480 instead of failing. The `unsupported preview size` message in earlier builds was a side effect of the failed open, not a real size problem.
-- Version bumped to 1.2.1 (versionCode 5).
+- **No crash on unplug/replug.** The app no longer closes the native camera session after the webcam is disconnected. The USB connection is already closed by then, and closing it again crashed the process. The session is dropped on the Java side instead.
+- Version bumped to 1.2.2 (versionCode 6).
 
 ## 1.2.0
 

@@ -42,6 +42,8 @@ class UsbCameraSource(private val ctx: Context) {
     private var client: MultiCameraClient? = null
     private var camera: MultiCameraClient.ICamera? = null
     private var activeDeviceId: Int? = null
+    /** Устройство отключено: системное соединение уже закрыто, нативное закрытие по нему нельзя вызывать. */
+    private var deviceGone = false
     @Volatile private var running = false
     @Volatile var connected = false
         private set
@@ -60,6 +62,7 @@ class UsbCameraSource(private val ctx: Context) {
         camera = null
         activeDeviceId = null
         connected = false
+        if (deviceGone) return
         try { cam.closeCamera() } catch (_: Exception) {}
     }
 
@@ -72,6 +75,7 @@ class UsbCameraSource(private val ctx: Context) {
         fun openCamera(device: UsbDevice, ctrlBlock: USBMonitor.UsbControlBlock?, w: Int, h: Int, fallbackLeft: Boolean) {
             if (!running) return
             releaseCamera()
+            deviceGone = false
             try {
                 val cam = CameraUVC(appCtx, device)
                 cam.setUsbControlBlock(ctrlBlock)
@@ -123,6 +127,7 @@ class UsbCameraSource(private val ctx: Context) {
             }
             override fun onDetachDec(device: UsbDevice?) {
                 if (!running) return
+                deviceGone = true
                 releaseCamera()
                 listener.onDisconnected()
             }
@@ -135,6 +140,7 @@ class UsbCameraSource(private val ctx: Context) {
             }
             override fun onDisConnectDec(device: UsbDevice?, ctrlBlock: USBMonitor.UsbControlBlock?) {
                 if (!running) return
+                deviceGone = true
                 releaseCamera()
                 listener.onDisconnected()
             }
