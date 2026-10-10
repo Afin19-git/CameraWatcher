@@ -9,6 +9,11 @@ Fixes to the USB webcam source after first testing on a Redmi 9C. Still **not ve
 - **Clean stop.** Stopping the service closes the camera and unregisters the USB receiver. Callbacks that arrive after stop are ignored.
 - **Resolution fallback.** If the webcam rejects the chosen size with `unsupported preview size`, the app retries once at 640×480 instead of failing. The `unsupported preview size` message in earlier builds was a side effect of the failed open, not a real size problem.
 - **No crash on unplug/replug.** The app no longer closes the native camera session after the webcam is disconnected. The USB connection is already closed by then, and closing it again crashed the process. The session is dropped on the Java side instead.
+- **Crash fixed (gl_render and the surface error).** The USB camera now streams straight into the app's surface through the library's `UVCCamera` class. The library's own render path created a second EGL renderer on that surface, which crashed the app. The library's USB permission and connect handling is still used.
+- **Crash fixed (fdsan on a failed open).** After a failed camera open the app no longer tries to release the native camera handle. That release closed a USB file descriptor the system still owns, which aborted the process. A failed open now just reports an error.
+- **Reconnect after unplug.** On unplug the old camera stream is now stopped, so it no longer holds the USB interface. If the camera fails to open right after reconnecting, the app retries up to four times, every 2.5 s.
+- **Only one USB camera is used.** If more than one USB device is connected, the app now locks to the first camera (by vendor and product ID) and ignores the others. Before, a second device made the app switch sessions, and the camera failed to open.
+- **Known issue: first connection after app start.** Some webcams are seen as two USB devices (video and audio). When the second one appears, the library resets the camera, so the first connection may fail. Unplug the camera and plug it back in; the next connection works. Not fixed in this release.
 - Version bumped to 1.2.2 (versionCode 6).
 
 ## 1.2.0
