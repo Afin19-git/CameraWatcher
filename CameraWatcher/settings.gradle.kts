@@ -5,8 +5,8 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google(); mavenCentral()
-        // JitPack: USB-webcam (UVC) library, see https://github.com/WojciechCzeronko/AndroidUSBCamera
-        maven("https://jitpack.io")
+        // Библиотека USB-камеры (AUSBC) публикуется только через JitPack
+        maven("https://jitpack.io") { content { includeGroupByRegex("com\\.github\\..*") } }
     }
 }
 rootProject.name = "CameraWatcher"

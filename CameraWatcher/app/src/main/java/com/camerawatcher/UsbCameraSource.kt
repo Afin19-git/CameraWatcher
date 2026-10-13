@@ -2,204 +2,281 @@ package com.camerawatcher
 
 import android.content.Context
 import android.hardware.usb.UsbDevice
-import android.view.Surface
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import com.jiangdg.ausbc.MultiCameraClient
+import com.jiangdg.ausbc.callback.ICameraStateCallBack
 import com.jiangdg.ausbc.callback.IDeviceConnectCallBack
-import com.jiangdg.uvc.UVCCamera
+import com.jiangdg.ausbc.callback.IPreviewDataCallBack
+import com.jiangdg.ausbc.camera.CameraUVC
+import com.jiangdg.ausbc.camera.bean.CameraRequest
 import com.jiangdg.usb.USBMonitor
 
 /**
- * USB-веб-камера (UVC) по OTG вместо своей камеры телефона.
+ * USB-веб-камера через библиотеку AUSBC (ernestp/AndroidUSBCamera, 3.6.0).
  *
- * Разрешение на USB и подключение/отключение отслеживает библиотека AndroidUSBCamera
- * (https://github.com/WojciechCzeronko/AndroidUSBCamera, через USBMonitor в MultiCameraClient).
- * Сам поток кадров идёт напрямую через UVCCamera (модуль libuvc): декодированные MJPEG-кадры
- * пишутся в наш Surface — тот же Surface, в который иначе пишет Camera2. Весь остальной конвейер
- * (GL, детектор движения, кодирование, надпись с датой) не меняется.
+ * Схема взята из её собственной демонстрации (MultiCameraFragment):
+ *   MultiCameraClient.register() -> onAttachDev -> requestPermission -> onConnectDev(ctrlBlock)
+ *   -> CameraUVC.setUsbControlBlock -> openCamera -> кадры в IPreviewDataCallBack -> closeCamera при отключении.
  *
- * Почему не через MultiCameraClient.ICamera: его путь OPENGL создаёт EGL на нашем Surface, который уже
- * занят конвейером (падение gl_render), а путь NORMAL требует настоящий View, которого у нас нет.
+ * Кадры берём «сырыми» (CameraRequest.setRawPreviewData(true)): камера отдаёт готовый NV21 прямо из нативного
+ * слоя, без показа на экран. Дальше NV21 превращается в картинку в нашем GL (см. GlRenderer.uploadNv21),
+ * поэтому детектор движения, запись, надпись с датой и превью работают так же, как у камеры телефона.
+ * Библиотека при этом сама крутит свой внутренний GL без окна (офскрин) — это штатный режим по её README.
  *
- * Важно про разрешение на доступ к USB-устройству: это системный диалог Android. Если веб-камера
- * подключается первый раз, когда приложение работает в фоне, диалог может не появиться — поэтому
- * первое подключение делается в превью, после этого Android запоминает разрешение.
- *
- * Жизненный цикл: одна активная UVC-сессия за раз. Перед новым открытием предыдущая закрывается.
- * При отключении камеры нативные вызовы по её уже закрытому соединению не делаются.
+ * Все вызовы библиотеки делаются из главного потока, как в её демо. Кадры приходят из потока библиотеки.
  */
-class UsbCameraSource(private val ctx: Context) {
+class UsbCameraSource(context: Context, private val listener: Listener) {
 
     interface Listener {
-        /** Камера открыта и пишет кадры в наш Surface; camW/camH — реально согласованный размер. */
-        fun onReady(camW: Int, camH: Int)
-        fun onError(message: String)
-        /** Камеру отключили; при повторном подключении приёмник USB откроет её снова сам. */
-        fun onDisconnected()
+        /** Новый кадр NV21 (w*h байт яркости + w*h/2 байт V,U). Вызывается из потока библиотеки. */
+        fun onFrame(data: ByteArray, w: Int, h: Int, tsNs: Long)
+        /** Камера открылась и стримит (true) или пропала (false). Из главного потока. */
+        fun onStatus(connected: Boolean)
+        /** Понятная пользователю проблема (нет разрешения и т.п.). Из главного потока. */
+        fun onProblem(msg: String)
     }
+
+    private val app = context.applicationContext
+    private val main = Handler(Looper.getMainLooper())
 
     private var client: MultiCameraClient? = null
-    private var uvc: UVCCamera? = null
-    private var activeDeviceId: Int? = null
-    /** Устройство отключено: системное соединение уже закрыто, нативное закрытие по нему не вызываем. */
-    private var deviceGone = false
-    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var camera: CameraUVC? = null
+    private var device: UsbDevice? = null
+
+    private var started = false
+    private var stopped = false
+    private var opened = false
+    @Volatile private var lastFrameMs = 0L
+    private var openedAtMs = 0L
+    private var useYuyv = false
     private var retryScheduled = false
-    /** Ключ (vendorId:productId) камеры, с которой работаем. Остальные UVC-устройства игнорируем. */
-    private var lockedKey: String? = null
-    @Volatile private var running = false
-    @Volatile var connected = false
-        private set
+    private var deniedReported = false
 
-    private fun keyOf(d: UsbDevice) = "${d.vendorId}:${d.productId}"
-
-    /** Закрывает текущую UVC-сессию. Безопасно вызывать многократно. */
-    private fun releaseCamera() {
-        val cam = uvc ?: return
-        uvc = null
-        activeDeviceId = null
-        connected = false
-        if (deviceGone) {
-            // устройство уже отключено: только останавливаем поток кадров, который держит USB-захват.
-            // close/destroy здесь нельзя (падение fdsan), поэтому дескриптор не трогаем.
-            try { cam.stopPreview() } catch (_: Exception) {}
-            return
-        }
-        try { cam.stopPreview() } catch (_: Exception) {}
-        try { cam.close() } catch (_: Exception) {}
-        try { cam.destroy() } catch (_: Exception) {}
+    // ------------------------------------------------------------ жизненный цикл
+    /** Запуск. Безопасно вызывать из любого потока. */
+    fun start() {
+        main.post { startOnMain() }
     }
 
-    private fun openCamera(
-        surface: Surface,
-        device: UsbDevice,
-        ctrlBlock: USBMonitor.UsbControlBlock?,
-        listener: Listener,
-        w: Int,
-        h: Int,
-        fallbackLeft: Boolean,
-        retriesLeft: Int,
-    ) {
-        if (!running) return
-        releaseCamera()
-        deviceGone = false
-        if (ctrlBlock == null) {
-            listener.onError("USB control block is null")
-            return
-        }
-        val cam = UVCCamera()
-        try {
-            cam.open(ctrlBlock)
-        } catch (e: Exception) {
-            // destroy() здесь нельзя: после неудачного open нативный release закрывает дескриптор,
-            // которым владеет USB-соединение, и fdsan аварийно завершает приложение. Объект просто отбрасываем.
-            if (!running) return
-            if (retriesLeft > 0) {
-                // сразу после отключения USB-интерфейс может быть ещё занят — пробуем ещё раз позже
-                retryScheduled = true
-                mainHandler.postDelayed({
-                    retryScheduled = false
-                    openCamera(surface, device, ctrlBlock, listener, w, h, fallbackLeft, retriesLeft - 1)
-                }, 2500L)
-            } else {
-                listener.onError("open camera failed: ${e.message}")
-            }
-            return
-        }
-        uvc = cam
-        activeDeviceId = device.deviceId
-        try {
-            cam.setPreviewSize(
-                w, h,
-                UVCCamera.DEFAULT_PREVIEW_MIN_FPS,
-                UVCCamera.DEFAULT_PREVIEW_MAX_FPS,
-                UVCCamera.FRAME_FORMAT_MJPEG,
-                UVCCamera.DEFAULT_BANDWIDTH,
-            )
-        } catch (e: Exception) {
-            releaseCamera()
-            if (!running) return
-            if (fallbackLeft && (w != 640 || h != 480)) {
-                // камера не поддерживает запрошенный размер — пробуем запасной 640×480
-                openCamera(surface, device, ctrlBlock, listener, 640, 480, false, retriesLeft)
-            } else {
-                listener.onError("unsupported preview size (${w}x$h)")
-            }
-            return
-        }
-        try {
-            cam.setPreviewDisplay(surface)
-            cam.startPreview()
-        } catch (e: Exception) {
-            releaseCamera()
-            if (running) listener.onError("start preview failed: ${e.message}")
-            return
-        }
-        if (!running) { releaseCamera(); return }
-        connected = true
-        listener.onReady(w, h)
+    private fun startOnMain() {
+        if (started || stopped) return
+        started = true
+        // Предыдущий экземпляр закрывает камеру асинхронно; новый открывать сразу рискованно (ошибка -99).
+        val wait = (MIN_GAP_AFTER_STOP_MS - (SystemClock.elapsedRealtime() - lastStopMs)).coerceAtLeast(0L)
+        main.postDelayed({ register() }, wait)
     }
 
-    /** Ищет UVC-камеру и направляет её кадры в [surface]. [reqW]/[reqH] — желаемый размер. */
-    fun start(surface: Surface, reqW: Int, reqH: Int, listener: Listener) {
-        stop()
-        running = true
-        val appCtx = ctx.applicationContext
-
-        val c = MultiCameraClient(appCtx, object : IDeviceConnectCallBack {
-            override fun onAttachDev(device: UsbDevice?) {
-                device ?: return
-                if (!running) return
-                if (lockedKey != null && keyOf(device) != lockedKey) return
-                client?.requestPermission(device)
-            }
-            override fun onDetachDec(device: UsbDevice?) {
-                device ?: return
-                if (!running) return
-                if (lockedKey != null && keyOf(device) != lockedKey) return
-                deviceGone = true
-                releaseCamera()
-                listener.onDisconnected()
-            }
-            override fun onConnectDev(device: UsbDevice?, ctrlBlock: USBMonitor.UsbControlBlock?) {
-                device ?: return
-                if (!running) return
-                // работаем только с одной камерой: первая открытая задаёт ключ, остальные игнорируем
-                if (lockedKey == null) lockedKey = keyOf(device)
-                if (keyOf(device) != lockedKey) return
-                // то же устройство уже открыто (повторное событие) — не открываем второй раз
-                if (uvc != null && activeDeviceId == device.deviceId) return
-                if (retryScheduled) return
-                openCamera(surface, device, ctrlBlock, listener, reqW, reqH, true, 4)
-            }
-            override fun onDisConnectDec(device: UsbDevice?, ctrlBlock: USBMonitor.UsbControlBlock?) {
-                device ?: return
-                if (!running) return
-                if (lockedKey != null && keyOf(device) != lockedKey) return
-                deviceGone = true
-                releaseCamera()
-                listener.onDisconnected()
-            }
-            override fun onCancelDev(device: UsbDevice?) {
-                if (running) listener.onError(Loc.ctx(appCtx).getString(R.string.usb_permission_denied))
-            }
-        })
-        client = c
-        c.register()
-        // камера уже могла быть подключена до запуска — запрашиваем доступ сами
-        c.getDeviceList(null)?.firstOrNull()?.let { c.requestPermission(it) }
+    private fun register() {
+        if (stopped) return
+        try {
+            val c = MultiCameraClient(app, deviceCallback)
+            c.openDebug(true) // подробный лог библиотеки в logcat (теги AUSBC, UVCCamera, USBMonitor)
+            client = c
+            c.register()
+            main.postDelayed(watchdog, WATCHDOG_MS)
+            logI("USB: monitor registered")
+        } catch (e: Exception) {
+            logE("USB register", e)
+            listener.onProblem(Loc.ctx(app).getString(R.string.w_usb_start_failed, e.message ?: ""))
+        }
     }
 
-    /** Полная остановка: закрыть камеру, снять приёмник USB, освободить клиент. */
+    /** Остановка и освобождение. Не блокирует (можно вызывать с GL-потока). */
     fun stop() {
-        running = false
-        retryScheduled = false
-        lockedKey = null
-        mainHandler.removeCallbacksAndMessages(null)
-        releaseCamera()
-        val c = client
-        client = null
-        try { c?.unRegister() } catch (_: Exception) {}
-        try { c?.destroy() } catch (_: Exception) {}
-        connected = false
+        stopped = true
+        main.post {
+            main.removeCallbacksAndMessages(null)
+            try { camera?.setUsbControlBlock(null) } catch (_: Exception) {}
+            closeCamera()
+            try { client?.unRegister() } catch (e: Exception) { logE("USB unRegister", e) }
+            try { client?.destroy() } catch (e: Exception) { logE("USB destroy", e) }
+            client = null
+            device = null
+            lastStopMs = SystemClock.elapsedRealtime()
+        }
+    }
+
+    // ------------------------------------------------------------ события USB
+    private val deviceCallback = object : IDeviceConnectCallBack {
+        override fun onAttachDev(device: UsbDevice?) {
+            device ?: return
+            if (stopped) return
+            logI("USB: attach ${device.deviceName} ${device.vendorId}:${device.productId}")
+            if (this@UsbCameraSource.device != null && this@UsbCameraSource.device?.deviceId != device.deviceId) {
+                return // работаем с одной камерой
+            }
+            this@UsbCameraSource.device = device
+            if (camera == null) requestAccess(device)
+        }
+
+        override fun onDetachDec(device: UsbDevice?) {
+            if (device?.deviceId != this@UsbCameraSource.device?.deviceId) return
+            logI("USB: detach")
+            try { camera?.setUsbControlBlock(null) } catch (_: Exception) {}
+            closeCamera()
+            this@UsbCameraSource.device = null
+            deniedReported = false
+        }
+
+        override fun onConnectDev(device: UsbDevice?, ctrlBlock: USBMonitor.UsbControlBlock?) {
+            device ?: return
+            ctrlBlock ?: return
+            if (stopped) return
+            if (device.deviceId != this@UsbCameraSource.device?.deviceId) return
+            logI("USB: connected, opening camera")
+            deniedReported = false
+            openCamera(device, ctrlBlock)
+        }
+
+        override fun onDisConnectDec(device: UsbDevice?, ctrlBlock: USBMonitor.UsbControlBlock?) {
+            if (device?.deviceId != this@UsbCameraSource.device?.deviceId) return
+            logI("USB: disconnected")
+            closeCamera()
+        }
+
+        override fun onCancelDev(device: UsbDevice?) {
+            if (device?.deviceId != this@UsbCameraSource.device?.deviceId) return
+            logI("USB: permission cancelled")
+            closeCamera()
+            if (!deniedReported) {
+                deniedReported = true
+                listener.onProblem(Loc.ctx(app).getString(R.string.usb_permission_denied))
+            }
+        }
+    }
+
+    /** Разрешение системы на доступ к камере (если уже выдано — диалога нет, сразу onConnectDev). */
+    private fun requestAccess(d: UsbDevice) {
+        try {
+            client?.requestPermission(d)
+        } catch (e: Exception) {
+            logE("USB requestPermission", e)
+        }
+    }
+
+    // ------------------------------------------------------------ камера
+    private fun openCamera(d: UsbDevice, ctrlBlock: USBMonitor.UsbControlBlock) {
+        closeCamera()
+        try {
+            val request = CameraRequest.Builder()
+                .setPreviewWidth(Prefs.usbResW)
+                .setPreviewHeight(Prefs.usbResH)
+                .setRenderMode(CameraRequest.RenderMode.OPENGL) // без окна: офскрин-режим библиотеки
+                .setRawPreviewData(true)                       // сырые NV21 прямо из камеры
+                .setCaptureRawImage(false)
+                .setAspectRatioShow(false)
+                .setAudioSource(CameraRequest.AudioSource.NONE) // звук пишем сами, микрофоном телефона
+                .setPreviewFormat(
+                    if (useYuyv) CameraRequest.PreviewFormat.FORMAT_YUYV else CameraRequest.PreviewFormat.FORMAT_MJPEG
+                )
+                .create()
+            val cam = CameraUVC(app, d)
+            cam.setUsbControlBlock(ctrlBlock)
+            cam.setCameraStateCallBack(stateCallback)
+            cam.addPreviewDataCallBack(frameCallback)
+            camera = cam
+            opened = false
+            lastFrameMs = 0L
+            openedAtMs = SystemClock.elapsedRealtime()
+            cam.openCamera<Any>(null, request)
+            logI("USB: openCamera ${Prefs.usbResW}x${Prefs.usbResH} format=${if (useYuyv) "YUYV" else "MJPEG"}")
+        } catch (e: Exception) {
+            logE("USB openCamera", e)
+            closeCamera()
+            scheduleRetry()
+        }
+    }
+
+    private fun closeCamera() {
+        val cam = camera ?: return
+        camera = null
+        val was = opened
+        opened = false
+        try { cam.removePreviewDataCallBack(frameCallback) } catch (_: Exception) {}
+        try { cam.closeCamera() } catch (e: Exception) { logE("USB closeCamera", e) }
+        if (was) listener.onStatus(false)
+    }
+
+    private val stateCallback = object : ICameraStateCallBack {
+        override fun onCameraState(self: MultiCameraClient.ICamera, code: ICameraStateCallBack.State, msg: String?) {
+            if (stopped || self !== camera) return
+            when (code) {
+                ICameraStateCallBack.State.OPENED -> {
+                    logI("USB: camera OPENED")
+                    opened = true
+                    openedAtMs = SystemClock.elapsedRealtime()
+                    listener.onStatus(true)
+                }
+                ICameraStateCallBack.State.CLOSED -> logI("USB: camera CLOSED")
+                ICameraStateCallBack.State.ERROR -> {
+                    logE("USB: camera ERROR: $msg")
+                    closeCamera()
+                    scheduleRetry()
+                }
+            }
+        }
+    }
+
+    private val frameCallback = object : IPreviewDataCallBack {
+        override fun onPreviewData(data: ByteArray?, width: Int, height: Int, format: IPreviewDataCallBack.DataFormat) {
+            if (data == null || format != IPreviewDataCallBack.DataFormat.NV21) return
+            if (width <= 0 || height <= 0 || data.size < width * height * 3 / 2) return
+            lastFrameMs = SystemClock.elapsedRealtime()
+            listener.onFrame(data, width and 1.inv(), height and 1.inv(), SystemClock.elapsedRealtimeNanos())
+        }
+    }
+
+    /** Заново запросить доступ (на Android 9+ библиотека при этом пересоздаёт управляющий блок устройства). */
+    private fun scheduleRetry() {
+        if (stopped || retryScheduled) return
+        retryScheduled = true
+        main.postDelayed({
+            retryScheduled = false
+            val d = device
+            if (!stopped && d != null && camera == null) requestAccess(d)
+        }, RETRY_MS)
+    }
+
+    /**
+     * Сторож: если камера «открыта», но кадры не идут, переоткрываем, переключая формат MJPEG <-> YUYV
+     * (часть камер не отдаёт нормальный MJPEG). Если кадры шли и вдруг пропали — просто переоткрываем.
+     */
+    private val watchdog = object : Runnable {
+        override fun run() {
+            if (stopped) return
+            try {
+                val now = SystemClock.elapsedRealtime()
+                if (camera != null && opened) {
+                    val last = if (lastFrameMs != 0L) lastFrameMs else openedAtMs
+                    if (now - last > NO_FRAMES_MS) {
+                        val hadFrames = lastFrameMs != 0L
+                        if (!hadFrames) useYuyv = !useYuyv
+                        logE("USB: no frames for ${now - last} ms, reopening (yuyv=$useYuyv, hadFrames=$hadFrames)")
+                        try { camera?.setUsbControlBlock(null) } catch (_: Exception) {}
+                        closeCamera()
+                        scheduleRetry()
+                    }
+                } else if (camera == null && device != null && !retryScheduled) {
+                    // камера есть, но так и не открылась (например, пропустили событие) — просим снова
+                    if (now - openedAtMs > NO_FRAMES_MS * 2) {
+                        openedAtMs = now
+                        device?.let { requestAccess(it) }
+                    }
+                }
+            } catch (e: Exception) {
+                logE("USB watchdog", e)
+            }
+            main.postDelayed(this, WATCHDOG_MS)
+        }
+    }
+
+    companion object {
+        private const val WATCHDOG_MS = 2000L
+        private const val NO_FRAMES_MS = 6000L
+        private const val RETRY_MS = 3000L
+        private const val MIN_GAP_AFTER_STOP_MS = 2500L
+        @Volatile private var lastStopMs = 0L
     }
 }

@@ -158,6 +158,34 @@ class GlRenderer {
         }
     """.trimIndent()
 
+    // Источник «USB-камера»: кадр NV21 (плоскость Y + чередующиеся V,U) лежит в двух обычных 2D-текстурах.
+    // sY — яркость; sUV — пары V,U: V попадает в канал r (LUMINANCE), U — в канал a (ALPHA).
+    private val fsCamNv21 = """
+        precision mediump float;
+        varying vec2 vTex; uniform sampler2D sY; uniform sampler2D sUV;
+        void main() {
+            float y = texture2D(sY, vTex).r;
+            vec4 t = texture2D(sUV, vTex);
+            float v = t.r - 0.5;
+            float u = t.a - 0.5;
+            gl_FragColor = vec4(y + 1.402 * v, y - 0.344136 * u - 0.714136 * v, y + 1.772 * u, 1.0);
+        }
+    """.trimIndent()
+
+    // Для детектора движения у NV21 яркость уже есть готовая — берём только плоскость Y.
+    private val fsLumaNv21 = """
+        precision mediump float;
+        varying vec2 vTex; uniform sampler2D sY; uniform float uOff;
+        void main() {
+            float y = texture2D(sY, vTex + vec2(-uOff, -uOff)).r
+                    + texture2D(sY, vTex + vec2( uOff, -uOff)).r
+                    + texture2D(sY, vTex + vec2(-uOff,  uOff)).r
+                    + texture2D(sY, vTex + vec2( uOff,  uOff)).r;
+            y *= 0.25;
+            gl_FragColor = vec4(y, y, y, 1.0);
+        }
+    """.trimIndent()
+
     private val vs2d = """
         attribute vec4 aPos; attribute vec2 aTex; varying vec2 vTex;
         void main() { gl_Position = aPos; vTex = aTex; }
@@ -172,6 +200,16 @@ class GlRenderer {
     private lateinit var camProg: Prog
     private lateinit var lumaProg: Prog
     private lateinit var texProg: Prog
+    private lateinit var camNvProg: Prog
+    private lateinit var lumaNvProg: Prog
+
+    /** true — кадры приходят как NV21 из USB-камеры (uploadNv21), false — из SurfaceTexture телефона. */
+    var nv21Mode = false
+    private var yTex = 0
+    private var uvTex = 0
+    private var nvW = 0
+    private var nvH = 0
+    private var nvBuf: ByteBuffer? = null
 
     private fun fb(a: FloatArray): FloatBuffer =
         ByteBuffer.allocateDirect(a.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
@@ -200,9 +238,20 @@ class GlRenderer {
         camProg = Prog(vsCam, fsCam)
         lumaProg = Prog(vsCam, fsLuma)
         texProg = Prog(vs2d, fs2d)
+        camNvProg = Prog(vsCam, fsCamNv21)
+        lumaNvProg = Prog(vsCam, fsLumaNv21)
 
-        val t = IntArray(2)
-        GLES20.glGenTextures(2, t, 0)
+        val t = IntArray(4)
+        GLES20.glGenTextures(4, t, 0)
+        yTex = t[2]
+        uvTex = t[3]
+        for (id in intArrayOf(yTex, uvTex)) {
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, id)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        }
         camTex = t[0]
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, camTex)
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
@@ -255,28 +304,80 @@ class GlRenderer {
         GLES20.glDisableVertexAttribArray(aTex)
     }
 
+    /**
+     * Кладёт кадр NV21 (w*h байт яркости, затем w*h/2 байт пар V,U) в две текстуры. Только на GL-потоке.
+     * Размеры должны быть чётными (у UVC-камер так и есть).
+     */
+    fun uploadNv21(data: ByteArray, w: Int, h: Int) {
+        val size = w * h * 3 / 2
+        if (data.size < size) throw IllegalArgumentException("NV21 frame too small: ${data.size} < $size")
+        var buf = nvBuf
+        if (buf == null || buf.capacity() < size) {
+            buf = ByteBuffer.allocateDirect(size).order(ByteOrder.nativeOrder())
+            nvBuf = buf
+        }
+        buf!!.clear()
+        buf.put(data, 0, size)
+        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1)
+        val resized = w != nvW || h != nvH
+        buf.position(0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, yTex)
+        if (resized) {
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_LUMINANCE, w, h, 0,
+                GLES20.GL_LUMINANCE, GLES20.GL_UNSIGNED_BYTE, buf)
+        } else {
+            GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, w, h,
+                GLES20.GL_LUMINANCE, GLES20.GL_UNSIGNED_BYTE, buf)
+        }
+        buf.position(w * h)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, uvTex)
+        if (resized) {
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_LUMINANCE_ALPHA, w / 2, h / 2, 0,
+                GLES20.GL_LUMINANCE_ALPHA, GLES20.GL_UNSIGNED_BYTE, buf)
+        } else {
+            GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, w / 2, h / 2,
+                GLES20.GL_LUMINANCE_ALPHA, GLES20.GL_UNSIGNED_BYTE, buf)
+        }
+        nvW = w
+        nvH = h
+    }
+
     private fun drawCamWith(p: Prog, stm: FloatArray, mvp: FloatArray, w: Int, h: Int) {
         GLES20.glViewport(0, 0, w, h)
         GLES20.glUseProgram(p.id)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, camTex)
-        GLES20.glUniform1i(p.u("sTex"), 0)
+        if (nv21Mode) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, yTex)
+            GLES20.glUniform1i(p.u("sY"), 0)
+            if (p === camNvProg) {
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, uvTex)
+                GLES20.glUniform1i(p.u("sUV"), 1)
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            }
+        } else {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, camTex)
+            GLES20.glUniform1i(p.u("sTex"), 0)
+        }
         GLES20.glUniformMatrix4fv(p.u("uMVP"), 1, false, mvp, 0)
         GLES20.glUniformMatrix4fv(p.u("uTex"), 1, false, stm, 0)
     }
 
     /** Кадр камеры в текущую поверхность. */
     fun drawCamera(stm: FloatArray, mvp: FloatArray, w: Int, h: Int) {
-        drawCamWith(camProg, stm, mvp, w, h)
-        drawQuad(camProg.a("aPos"), camProg.a("aTex"), quadPos, quadTex)
+        val p = if (nv21Mode) camNvProg else camProg
+        drawCamWith(p, stm, mvp, w, h)
+        drawQuad(p.a("aPos"), p.a("aTex"), quadPos, quadTex)
     }
 
     /** Кадр камеры в виде яркости в маленький буфер детектора. */
     fun drawLuma(stm: FloatArray, mvp: FloatArray, off: Float) {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo)
-        drawCamWith(lumaProg, stm, mvp, fboW, fboH)
-        GLES20.glUniform1f(lumaProg.u("uOff"), off)
-        drawQuad(lumaProg.a("aPos"), lumaProg.a("aTex"), quadPos, quadTex)
+        val p = if (nv21Mode) lumaNvProg else lumaProg
+        drawCamWith(p, stm, mvp, fboW, fboH)
+        GLES20.glUniform1f(p.u("uOff"), off)
+        drawQuad(p.a("aPos"), p.a("aTex"), quadPos, quadTex)
     }
 
     fun readLuma(dst: ByteBuffer) {
@@ -331,7 +432,7 @@ class GlRenderer {
 
     fun release() {
         try {
-            GLES20.glDeleteTextures(3, intArrayOf(camTex, ovTexId, fboTex), 0)
+            GLES20.glDeleteTextures(5, intArrayOf(camTex, ovTexId, fboTex, yTex, uvTex), 0)
             if (fbo != 0) GLES20.glDeleteFramebuffers(1, intArrayOf(fbo), 0)
         } catch (e: Exception) { /* контекст уже мог быть потерян */ }
     }

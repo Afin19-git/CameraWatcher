@@ -24,8 +24,10 @@ android {
         applicationId = "com.camerawatcher"
         minSdk = 24
         targetSdk = 33
-        versionCode = 6
-        versionName = "1.2.2"
+        versionCode = 7
+        versionName = "1.2.3"
+        // Нативные библиотеки USB-камеры нужны только для реальных телефонов (ARM 32/64 бит)
+        ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
     }
 
     signingConfigs {
@@ -58,10 +60,10 @@ android {
 dependencies {
     // Вход в Google и токен для Drive (Google Identity Services)
     implementation("com.google.android.gms:play-services-auth:22.0.0")
-    // USB-веб-камера (UVC) по OTG: https://github.com/WojciechCzeronko/AndroidUSBCamera
-    implementation("com.github.WojciechCzeronko.AndroidUSBCamera:libausbc:3.6.0-lowlatency1")
-    // libausbc подключает этот модуль у себя как implementation, а не api, поэтому классы libuvc
-    // (в т.ч. USBMonitor, который используется в UsbCameraSource.kt) не передаются транзитивно —
-    // нужно подключать явно, отдельной строкой.
-    implementation("com.github.WojciechCzeronko.AndroidUSBCamera:libuvc:3.6.0-lowlatency1")
+
+    // USB-веб-камера: AUSBC (UVC, нативный libuvc внутри). Версия зафиксирована.
+    implementation("com.github.ernestp.AndroidUSBCamera:libausbc:3.6.0")
+    // libausbc подключает libuvc как implementation, поэтому класс USBMonitor (он в сигнатурах колбэков)
+    // для нашего кода виден только при явной зависимости.
+    implementation("com.github.ernestp.AndroidUSBCamera:libuvc:3.6.0")
 }

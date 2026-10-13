@@ -23,6 +23,7 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
@@ -44,7 +45,7 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
         fun onClipSaved(file: File) {}
         /** Только для превью (armed=false): телефон повернули, картинка и сетка пересчитаны. */
         fun onGeometryChanged(g: Geometry) {}
-        /** Только источник USB: подключилась или пропала веб-камера. */
+        /** Только источник USB: камера начала отдавать кадры (true) или пропала (false). */
         fun onSourceStatus(connected: Boolean) {}
     }
 
@@ -105,8 +106,15 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
     private var released = false
     private var mvpReady = false
     private var recErrors = 0
-    private var usbSource: UsbCameraSource? = null
-    private var usbWarnedNoDevice = false
+
+    // USB-камера: кадры приходят из потока библиотеки, на GL-поток уходит только самый свежий
+    private class UsbFrame(val data: ByteArray, val w: Int, val h: Int, val tsNs: Long)
+    private var usb: UsbCameraSource? = null
+    private val usbPending = AtomicReference<UsbFrame?>(null)
+    @Volatile private var usbFrames = 0L
+    @Volatile private var usbConnected = false
+    private var usbWarned = false
+    private var usbLastLog = 0L
 
     companion object {
         private const val ANALYSIS_MS = 200L      // детектор работает 5 раз в секунду
@@ -117,8 +125,7 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
     fun start() {
         thread.start()
         handler = Handler(thread.looper)
-        // Живое слежение за акселерометром имеет смысл только для своей камеры телефона: внешняя
-        // USB-камера закреплена отдельно и не поворачивается вместе с телефоном.
+        // Живое слежение за акселерометром имеет смысл только для камеры телефона: USB-камера крепится отдельно.
         if (!armed && !usingUsb) DeviceOrientation.start(ctx)
         handler.post { safeInit() }
     }
@@ -126,7 +133,7 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
     private fun safeInit() {
         try {
             initGl()
-            if (usingUsb) openUsbCamera() else openCamera()
+            if (usingUsb) startUsb() else openCamera()
             handler.postDelayed(tickRunnable, 1000)
         } catch (e: Exception) {
             logE("init failed", e)
@@ -153,8 +160,8 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
         try { tone?.release() } catch (_: Exception) {}
         tone = null
         if (recording) stopRecording()
-        try { usbSource?.stop() } catch (_: Exception) {}
-        usbSource = null
+        try { usb?.stop() } catch (_: Exception) {}
+        usb = null
         try { session?.close() } catch (_: Exception) {}
         session = null
         try { camera?.close() } catch (_: Exception) {}
@@ -260,11 +267,15 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
         lumaArr = ByteArray(r.fboW * r.fboH * 4)
         lumaOff = 0.3f / max(r.fboW, r.fboH)
 
-        val tex = SurfaceTexture(r.camTex)
-        tex.setDefaultBufferSize(g.camW, g.camH)
-        tex.setOnFrameAvailableListener({ onFrame() }, handler)
-        st = tex
-        camSurface = Surface(tex)
+        if (usingUsb) {
+            r.nv21Mode = true // кадры приходят как NV21 и грузятся в текстуры вручную (uploadNv21)
+        } else {
+            val tex = SurfaceTexture(r.camTex)
+            tex.setDefaultBufferSize(g.camW, g.camH)
+            tex.setOnFrameAvailableListener({ onFrame() }, handler)
+            st = tex
+            camSurface = Surface(tex)
+        }
         applyDetectorConfig()
     }
 
@@ -323,34 +334,6 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
         if (!released) handler.postDelayed({ openCamera() }, 2000)
     }
 
-    /**
-     * USB-веб-камера вместо своей камеры телефона. UsbCameraSource сама следит за подключением/отключением
-     * устройства (через постоянно зарегистрированный приёмник системных широковещательных сообщений), поэтому
-     * эта функция вызывается один раз за всё время жизни движка, а не в цикле переоткрытия, как у Camera2.
-     */
-    private fun openUsbCamera() {
-        if (released) return
-        val surf = camSurface ?: return
-        val src = UsbCameraSource(ctx)
-        usbSource = src
-        src.start(surf, g.camW, g.camH, object : UsbCameraSource.Listener {
-            override fun onReady(camW: Int, camH: Int) {
-                logI("USB camera ready ${camW}x$camH")
-                usbWarnedNoDevice = false
-                main.post { for (l in listeners) l.onSourceStatus(true) }
-            }
-            override fun onError(message: String) {
-                logE("USB camera: $message")
-                warn(message)
-                main.post { for (l in listeners) l.onSourceStatus(false) }
-            }
-            override fun onDisconnected() {
-                main.post { for (l in listeners) l.onSourceStatus(false) }
-                handler.post { if (recording) stopRecording() }
-            }
-        })
-    }
-
     @Suppress("DEPRECATION")
     private fun createSession() {
         val c = camera ?: return
@@ -383,6 +366,57 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
         }
     }
 
+    // ------------------------------------------------------------ USB-камера
+    private fun startUsb() {
+        val s = UsbCameraSource(ctx, object : UsbCameraSource.Listener {
+            override fun onFrame(data: ByteArray, w: Int, h: Int, tsNs: Long) = onUsbFrameArrived(data, w, h, tsNs)
+            override fun onStatus(connected: Boolean) {
+                usbConnected = connected
+                if (!connected) usbFrames = 0
+                main.post { for (l in listeners) l.onSourceStatus(connected) }
+            }
+            override fun onProblem(msg: String) { warn(msg) }
+        })
+        usb = s
+        s.start()
+    }
+
+    /** Поток библиотеки. Складываем кадр в «слот»; на GL-поток ставим задачу, только если слот был пуст. */
+    private fun onUsbFrameArrived(data: ByteArray, w: Int, h: Int, tsNs: Long) {
+        if (released) return
+        val prev = usbPending.getAndSet(UsbFrame(data, w, h, tsNs))
+        if (prev == null) handler.post(usbDraw)
+    }
+
+    private val usbDraw = Runnable {
+        val f = usbPending.getAndSet(null)
+        if (f != null) drawUsbFrame(f)
+    }
+
+    private fun drawUsbFrame(f: UsbFrame) {
+        if (released) return
+        val e = egl ?: return
+        val r = renderer ?: return
+        try {
+            e.makeCurrent(pbuf)
+            if (f.w != g.camW || f.h != g.camH) {
+                // камера отдаёт не тот размер, что в настройках (взяла ближайший поддерживаемый) — пересчитываем кадр
+                logI("USB frame size ${f.w}x${f.h} (was ${g.camW}x${g.camH})")
+                if (recording) stopRecording() // размер видео посреди клипа менять нельзя
+                applyNewGeometry(GeometryBuilder.buildUsb(f.w, f.h))
+            }
+            r.uploadNv21(f.data, f.w, f.h)
+            // верх кадра NV21 — первая строка, а текстурные координаты идут снизу вверх: переворот по вертикали
+            java.util.Arrays.fill(stm, 0f)
+            stm[0] = 1f; stm[5] = -1f; stm[10] = 1f; stm[13] = 1f; stm[15] = 1f
+            usbFrames++
+            if (usbFrames == 1L) logI("USB: first frame ${f.w}x${f.h}")
+            renderFrame(e, r, f.tsNs)
+        } catch (ex: Exception) {
+            frameError(ex)
+        }
+    }
+
     // ------------------------------------------------------------ кадры
     private fun onFrame() {
         if (released) return
@@ -393,8 +427,16 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
             e.makeCurrent(pbuf)
             tex.updateTexImage()
             tex.getTransformMatrix(stm)
+            renderFrame(e, r, tex.timestamp)
+        } catch (ex: Exception) {
+            frameError(ex)
+        }
+    }
+
+    /** Общая часть кадра для камеры телефона и USB: матрица, анализ движения, запись, превью. Текстура и stm уже готовы. */
+    private fun renderFrame(e: EglCore, r: GlRenderer, ts: Long) {
+        try {
             buildMvpIfNeeded()
-            val ts = tex.timestamp
             val now = SystemClock.elapsedRealtime()
 
             if (now - lastAnalysis >= ANALYSIS_MS) {
@@ -435,6 +477,12 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
                 }
             }
         } catch (ex: Exception) {
+            frameError(ex)
+        }
+    }
+
+    private fun frameError(ex: Exception) {
+        run {
             logE("onFrame", ex)
             if (recording && ++recErrors > 5) { // запись сломана (например, муксер не принял кодек) — не мучаем её дальше
                 recErrors = 0
@@ -560,9 +608,15 @@ class CameraEngine(private val ctx: Context, val armed: Boolean, displayRotation
                 } else {
                     checkOrientationChange()
                 }
-                if (usingUsb && !usbWarnedNoDevice && tickCount == 8 && usbSource?.connected != true) {
-                    usbWarnedNoDevice = true
-                    warn(str(R.string.w_no_usb_camera))
+                if (usingUsb) {
+                    if (!usbWarned && tickCount == 10 && !usbConnected) {
+                        usbWarned = true
+                        warn(str(R.string.w_no_usb_camera))
+                    }
+                    if (now - usbLastLog >= 30_000) {
+                        usbLastLog = now
+                        logI("USB: connected=$usbConnected frames=$usbFrames recording=$recording")
+                    }
                 }
             } catch (ex: Exception) {
                 logE("tick", ex)
