@@ -8,7 +8,7 @@
 2. *File → Open* the project folder and wait for Gradle sync.
 3. Connect a phone with USB debugging and press *Run*, or use *Build → Build APK(s)*.
 
-The app needs Android 7.0 (API 24). Dependencies: `play-services-auth` (Google Drive sign-in) and, for the USB-webcam camera source, `libausbc` fetched from JitPack — the first Gradle sync needs internet access to jitpack.io.
+The app needs Android 7.0 (API 24). Dependencies: `play-services-auth` (Google Drive sign-in) and, for the USB-webcam camera source, `libausbc` and `libuvc` (AUSBC 3.6.0) fetched from JitPack — the first Gradle sync needs internet access to jitpack.io.
 
 ## 2. Sign with your own key
 
@@ -42,7 +42,9 @@ If you change `applicationId` in a fork, create a client for the new package nam
 - **Error 10 / “app not found”**: package name or SHA-1 in the client does not match the installed build, or the client was created minutes ago.
 - **Sign-in expires every week**: the app is still in *Testing*, publish it.
 - **`keytool` is not recognized**: use the full path (see step 2.1).
-- **Gradle can't resolve `com.github.WojciechCzeronko.AndroidUSBCamera:libausbc` (or `libuvc`)**: check internet access to jitpack.io (corporate networks sometimes block it), and that the tag `3.6.0-lowlatency1` still exists in that GitHub repo — if the maintainer renamed or removed it, open the repo's Releases/Tags page, pick a current tag, and update the version for **both** dependency lines in `app/build.gradle.kts` (they must match).
+- **Gradle can't resolve `com.github.ernestp.AndroidUSBCamera:libausbc` (or `libuvc`)**: check internet access to jitpack.io (corporate networks sometimes block it) and that JitPack has built tag `3.6.0` (open `https://jitpack.io/#ernestp/AndroidUSBCamera` and look at the log if it shows red). Both dependency lines in `app/build.gradle.kts` must use the same version, and the `jitpack.io` repository must stay in `settings.gradle.kts`.
 - **Unresolved reference: `USBMonitor` (or similar) in `UsbCameraSource.kt`**: `libausbc` pulls in the `libuvc` module internally as `implementation`, which Gradle does not pass on to apps that depend on `libausbc` alone — `libuvc` has to be declared as its own dependency line too (already done in this project; if a future edit removes it, this is why it breaks).
+- **“Incompatible version of Kotlin” for AUSBC classes**: the library is built with a newer Kotlin than the project's plugin; raise the Kotlin Gradle plugin version in the root `build.gradle.kts` (and migrate `kotlinOptions` to `compilerOptions` if you go to 2.2+).
+- **USB webcam: no picture**: connect it with the app open and allow USB access in the system dialog (tick *always*). Filter logcat by `USB:`, `AUSBC`, `UVCCamera`, `USBMonitor` — “USB: first frame …” means frames arrive; “USB: no frames …” means the app is reopening the camera with the other pixel format.
 - **Play Protect warns about the app**: expected for a background camera service that is not from Google Play. *More details → Install anyway*.
 - **Folders on Drive are named in the wrong language**: names are fixed when you sign in. Sign out and in again after changing the language to switch to a new folder tree (old files stay in the old one).

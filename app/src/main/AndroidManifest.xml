@@ -16,8 +16,7 @@
 
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />
-    <!-- Библиотека USB-камеры (AndroidUSBCamera) объявляет этот признак обязательным; у нас это
-         необязательная возможность — без OTG приложение работает со своей камерой телефона. -->
+    <!-- Библиотека USB-камеры объявляет USB-host обязательным; для приложения он нужен только при источнике «USB». -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false" tools:node="replace" />
 
     <application
@@ -35,6 +34,14 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- При подключении веб-камеры Android предлагает открыть это приложение и запомнить выбор («всегда»),
+                 после чего доступ к камере выдаётся без повторных вопросов. -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_device_filter" />
         </activity>
 
         <activity android:name=".SettingsActivity" android:exported="false" />

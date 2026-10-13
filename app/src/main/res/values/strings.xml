@@ -40,10 +40,10 @@
     <string name="source_phone">This phone</string>
     <string name="source_usb">USB webcam (OTG)</string>
     <string name="source_phone_note">Uses the phone\'s own camera. Rotation is automatic (accelerometer).</string>
-    <string name="source_usb_note">A USB webcam connected through an OTG adapter, instead of the phone\'s own camera. Experimental: webcam support varies a lot between models.</string>
+    <string name="source_usb_note">A USB webcam connected through an OTG adapter, instead of the phone\'s own camera. Frames are read with the AUSBC library (UVC). Experimental.</string>
     <string name="source_change_note">The camera is running: the source changes after it restarts.</string>
-    <string name="usb_card_hint">Connect the webcam via an OTG adapter before starting the camera. The first time, do it with the app open (preview screen) so Android can show the one-time permission prompt — it then remembers the choice for this webcam.</string>
-    <string name="usb_resolution_note">A target resolution — the webcam may deliver a different one depending on what it supports; the picture is scaled to fit.</string>
+    <string name="usb_card_hint">Connect the webcam via an OTG adapter. The first time, keep the app open and allow USB access in the system dialog (tick \"always\" if offered); after that it also works with the screen off.</string>
+    <string name="usb_resolution_note">A target resolution — the closest size the webcam supports is used.</string>
     <string name="deg_fmt">%1$d°</string>
     <string name="usb_rotation">Rotation</string>
     <string name="usb_rotation_note">Set manually: the webcam is mounted separately from the phone, so there is no accelerometer to detect this automatically.</string>
@@ -51,6 +51,7 @@
     <string name="usb_not_found">USB camera: not found</string>
     <string name="usb_permission_denied">Permission to access the USB camera was denied</string>
     <string name="w_no_usb_camera">No USB webcam found. Connect it via an OTG adapter.</string>
+    <string name="w_usb_start_failed">Could not start the USB camera: %1$s</string>
     <string name="sec_recording">RECORDING</string>
     <string name="camera_unavailable_short">Camera unavailable</string>
     <string name="resolution">Resolution</string>

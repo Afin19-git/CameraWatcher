@@ -39,10 +39,11 @@ class CameraInfo private constructor(ctx: Context) {
 
     init {
         val mgr = ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val want = CameraCharacteristics.LENS_FACING_BACK
         var pick: String? = null
         for (cid in mgr.cameraIdList) {
             val ch = mgr.getCameraCharacteristics(cid)
-            if (ch.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) {
+            if (ch.get(CameraCharacteristics.LENS_FACING) == want) {
                 pick = cid
                 break
             }
@@ -88,10 +89,9 @@ class CameraInfo private constructor(ctx: Context) {
 /**
  * Всё, что нужно знать о кадре.
  * rot — на сколько градусов по часовой нужно повернуть «сырой» кадр источника, чтобы он стоял ровно.
- * Для телефонной камеры определяется автоматически по акселерометру; для USB-камеры задаётся вручную
- * в настройках, так как веб-камера крепится отдельно от телефона и не поворачивается вместе с ним.
+ * Определяется автоматически по акселерометру.
  * outW/outH — размер итогового видео: кадр целиком, без обрезки, в том соотношении, какое отдаёт источник.
- * fpsRange — только для Camera2 (телефон); для USB-источника не используется (null).
+ * fpsRange — диапазон FPS для Camera2.
  */
 data class Geometry(
     val camW: Int, val camH: Int,
@@ -102,7 +102,7 @@ data class Geometry(
 )
 
 object GeometryBuilder {
-    /** Поворот и итоговый размер кадра из «сырого» размера источника — общая часть для телефона и USB. */
+    /** Поворот и итоговый размер кадра из «сырого» размера источника — общая часть. */
     private fun frame(rawW: Int, rawH: Int, rot: Int): Triple<Int, Int, Pair<Int, Int>> {
         val swap = rot == 90 || rot == 270
         val outW = (if (swap) rawH else rawW) and 1.inv()
@@ -132,13 +132,13 @@ object GeometryBuilder {
     }
 
     /**
-     * Геометрия для USB-веб-камеры: camW/camH — реально согласованный с камерой размер (известен только
-     * после её подключения), поворот — ручная настройка Prefs.usbRotation. FPS берётся из настроек записи
-     * (сама USB-камера частоту кадров через эту библиотеку не сообщает, кодируем с тем, что реально придёт).
+     * Геометрия для USB-веб-камеры: camW/camH — размер, который реально отдаёт камера (известен по первому кадру),
+     * поворот — ручная настройка Prefs.usbRotation. Частота кадров камерой не сообщается: в кодировщик
+     * идёт 30 к/с, а метки времени берутся от реального прихода кадров, так что длительность видео верная.
      */
     fun buildUsb(camW: Int, camH: Int): Geometry {
         val rot = Prefs.usbRotation
         val (outW, outH, grid) = frame(camW, camH, rot)
-        return Geometry(camW, camH, rot, outW, outH, grid.first, grid.second, Prefs.fps, null)
+        return Geometry(camW, camH, rot, outW, outH, grid.first, grid.second, 30, null)
     }
 }
